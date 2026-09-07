@@ -55,6 +55,19 @@ extension EXT4.EXT4Reader {
                     inode: unsafe item.inode,
                     mode: inode.mode))
         }
+        // A name that reuses an inode already seen is not given a tree node,
+        // because the tree models the filesystem's shape and a hard link adds
+        // a name rather than a shape. It is still a name the image holds, and
+        // omitting it here would reproduce exactly the blindness this exists
+        // to remove.
+        for (path, inode) in unsafe self.hardlinks {
+            let record = try self.getInode(number: inode)
+            found.append(
+                Entry(
+                    path: FilePath("/" + path.description),
+                    inode: inode,
+                    mode: record.mode))
+        }
         return found.sorted { $0.path.string < $1.path.string }
     }
 }
