@@ -607,14 +607,17 @@ extension EXT4 {
 }
 
 extension EXT4.Inode {
-    public static func Root() -> EXT4.Inode {
+    /// - Parameter timestamp: The value stamped into the root inode's times.
+    ///   Defaults to the wall clock; pass a fixed date to make the resulting
+    ///   image reproducible.
+    public static func Root(timestamp: Date? = nil) -> EXT4.Inode {
         var inode = Self()  // inode
         inode.mode = Self.Mode(.S_IFDIR, 0o755)
         inode.linksCount = 2
         inode.uid = 0
         inode.gid = 0
         // time
-        let now = Date().fs()
+        let now = (timestamp ?? Date()).fs()
         let now_lo: UInt32 = now.lo
         let now_hi: UInt32 = now.hi
         inode.atime = now_lo

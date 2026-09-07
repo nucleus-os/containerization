@@ -25,6 +25,32 @@ extension EXT4 {
     /// The `EXT4.Formatter` class provides methods to format a block device with the ext4 filesystem.
     /// It allows customization of block size and maximum disk size.
     public class Formatter {
+        /// Values a formatter would otherwise invent, supplied by the caller.
+        ///
+        /// A formatter generates a filesystem UUID and reads the wall clock,
+        /// so two images of identical content differ in bytes. Supplying both
+        /// makes the image a function of its contents, which is what lets it
+        /// be addressed by them.
+        public struct Reproducibility: Sendable {
+            public let uuid: UUID
+            public let timestamp: Date
+
+            public init(uuid: UUID, timestamp: Date) {
+                self.uuid = uuid
+                self.timestamp = timestamp
+            }
+        }
+
+        private let reproducibility: Reproducibility?
+        /// Timestamps for the inodes the formatter creates on its own behalf,
+        /// which are as much a part of the image's bytes as a caller's are.
+        private var internalTimestamps: FileTimestamps {
+            FileTimestamps(
+                access: reproducibility?.timestamp,
+                modification: reproducibility?.timestamp,
+                creation: reproducibility?.timestamp,
+                now: reproducibility?.timestamp)
+        }
         private let logBlockSize: UInt32
         var blockSize: UInt32 { 1024 << logBlockSize }
         private var size: UInt64
@@ -75,7 +101,8 @@ extension EXT4 {
         ///
         /// - Important: Ensure that the destination block device is accessible and has sufficient permissions
         ///              for formatting. The formatting process will erase all existing data on the device.
-        public init(_ devicePath: FilePath, blockSize: UInt32 = 4096, minDiskSize: UInt64 = 256.kib(), journal: JournalConfig? = nil) throws {
+        public init(_ devicePath: FilePath, blockSize: UInt32 = 4096, minDiskSize: UInt64 = 256.kib(), journal: JournalConfig? = nil, reproducibility: Reproducibility? = nil) throws {
+            self.reproducibility = reproducibility
             /// The constructor performs the following steps:
             ///
             /// 1. Creates the first 10 inodes:
@@ -121,7 +148,7 @@ extension EXT4 {
             // step #1
             self.inodes = [
                 Ptr(Inode()),  // defective block inode
-                Ptr(Inode.Root()),
+                Ptr(Inode.Root(timestamp: reproducibility?.timestamp)),
             ]
             // reserved inodes
             for _ in 2..<EXT4.FirstInode - 1 {
@@ -133,7 +160,9 @@ extension EXT4 {
             // skip past the superblock and block descriptor table
             try self.seek(block: self.groupDescriptorBlocks + 1)
             // lost+found directory is required for e2fsck to pass
-            try self.create(path: FilePath("/lost+found"), mode: Inode.Mode(.S_IFDIR, 0o700))
+            try self.create(
+                path: FilePath("/lost+found"), mode: Inode.Mode(.S_IFDIR, 0o700),
+                ts: internalTimestamps)
         }
 
         // Creates a hard link at the path specified by `link` that points to the same file or directory as the path specified by `target`.
@@ -167,7 +196,9 @@ extension EXT4 {
                 try self.unlink(path: link)
             }
             // create all predecessors recursively
-            try self.create(path: parentPath, mode: Inode.Mode(.S_IFDIR, 0o755), recursion: true)
+            try self.create(
+                path: parentPath, mode: Inode.Mode(.S_IFDIR, 0o755),
+                ts: internalTimestamps, recursion: true)
             guard let parentTreeNodePtr = self.tree.lookup(path: parentPath) else {
                 throw Error.notFound(parentPath)
             }
@@ -279,7 +310,7 @@ extension EXT4 {
             for block in pathNode.additionalBlocks ?? [] {
                 self.deletedBlocks.append((start: block.start, end: block.end))
             }
-            let now = Date().fs()
+            let now = (self.reproducibility?.timestamp ?? Date()).fs()
             pathInode = Inode()
             pathInode.dtime = now.lo
             pathInodePtr.pointee = pathInode
@@ -383,7 +414,9 @@ extension EXT4 {
             }
             // create all predecessors recursively
             let parentPath: FilePath = path.dir
-            try self.create(path: parentPath, mode: Inode.Mode(.S_IFDIR, 0o755), recursion: true)
+            try self.create(
+                path: parentPath, mode: Inode.Mode(.S_IFDIR, 0o755),
+                ts: internalTimestamps, recursion: true)
             guard let parentTreeNodePtr = self.tree.lookup(path: parentPath) else {
                 throw Error.notFound(parentPath)
             }
@@ -640,7 +673,7 @@ extension EXT4 {
             }
 
             // Generate UUID once; shared by filesystem superblock and JBD2 superblock.
-            let filesystemUUID = UUID().uuid
+            let filesystemUUID = (self.reproducibility?.uuid ?? UUID()).uuid
 
             // Journal init MUST precede optimizeBlockGroupLayout() and commitInodeTable().
             // Reason 1: optimizeBlockGroupLayout reads self.currentBlock — journal blocks

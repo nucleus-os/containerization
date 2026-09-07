@@ -54,11 +54,14 @@ public struct FileTimestamps {
         now.fs().hi
     }
 
-    public init(access: Date?, modification: Date?, creation: Date?) {
-        now = Date()
-        self.access = access ?? now
-        self.modification = modification ?? now
-        self.creation = creation ?? now
+    /// - Parameter now: The value stamped where a timestamp is not supplied,
+    ///   and reported as the current time. Defaults to the wall clock; pass a
+    ///   fixed date to make the resulting image reproducible.
+    public init(access: Date?, modification: Date?, creation: Date?, now: Date? = nil) {
+        self.now = now ?? Date()
+        self.access = access ?? self.now
+        self.modification = modification ?? self.now
+        self.creation = creation ?? self.now
     }
 
     public init() {
